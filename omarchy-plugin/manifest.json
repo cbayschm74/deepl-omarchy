@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "id": "cbayschm.deepl",
+  "name": "DeepL Clipboard",
+  "version": "1.0.0",
+  "author": "Carlos Bay-Schmith",
+  "license": "MIT",
+  "description": "Open a compact DeepL window and translate plain-text clipboard contents.",
+  "kinds": ["bar-widget"],
+  "entryPoints": {
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "DeepL Clipboard",
+    "description": "Translate clipboard text with DeepL.",
+    "category": "Utilities",
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}

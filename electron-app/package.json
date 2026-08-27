@@ -1,0 +1,9 @@
+{
+  "name": "deepl-omarchy",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Unofficial DeepL clipboard integration for Omarchy",
+  "license": "MIT",
+  "author": "Carlos Bay-Schmith",
+  "main": "main.js"
+}
