@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "id": "cbayschm.deepl",
+  "id": "io.github.cbayschm74.deepl-clipboard",
   "name": "DeepL Clipboard",
   "version": "1.0.0",
   "author": "Carlos Bay-Schmith",

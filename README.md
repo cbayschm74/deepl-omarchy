@@ -24,30 +24,24 @@ for Wayland and does not depend on Go, GTK WebKit, `xsel`, or `xdotool`.
 ## Requirements
 
 - Omarchy with Hyprland and the Omarchy shell
-- `electron43`
+- Electron (`electron43` is preferred and tested; `electron` is also detected)
 - `wl-clipboard`
 - `libnotify` (used only when clipboard text cannot be read)
 
 ## Install
 
-Clone the project at the default location expected by the included widget:
+Install and enable the plugin from its public GitHub repository:
 
 ```bash
-git clone <your-repository-url> "$HOME/deepl-omarchy"
-chmod +x "$HOME/deepl-omarchy/launch.sh"
+omarchy plugin add https://github.com/cbayschm74/deepl-omarchy --enable
 ```
 
-Install the user-owned bar plugin:
+The plugin is self-contained in Omarchy's user plugin directory. Move it to
+the desired bar section if needed:
 
 ```bash
-mkdir -p "$HOME/.config/omarchy/plugins/cbayschm.deepl"
-cp "$HOME/deepl-omarchy/omarchy-plugin/BarWidget.qml" \
-  "$HOME/deepl-omarchy/omarchy-plugin/manifest.json" \
-  "$HOME/.config/omarchy/plugins/cbayschm.deepl/"
+omarchy bar move io.github.cbayschm74.deepl-clipboard --section right
 ```
-
-Add the plugin ID `cbayschm.deepl` to the desired section of
-`~/.config/omarchy/shell.json`.
 
 Add the keyboard shortcut to `~/.config/hypr/bindings.lua`:
 
@@ -55,7 +49,7 @@ Add the keyboard shortcut to `~/.config/hypr/bindings.lua`:
 o.bind(
   "CTRL + ALT + C",
   "Translate clipboard with DeepL",
-  os.getenv("HOME") .. "/deepl-omarchy/launch.sh"
+  os.getenv("HOME") .. "/.config/omarchy/plugins/io.github.cbayschm74.deepl-clipboard/launch.sh"
 )
 ```
 
@@ -76,12 +70,37 @@ hyprctl reload
 hyprctl configerrors
 ```
 
+## Account and first use
+
+A DeepL account is not technically required for ordinary translation, but
+DeepL may present repeated human-verification challenges to logged-out embedded
+browsers. Signing in is therefore recommended for a smoother experience.
+
+The first launch with a new profile shows the complete DeepL page so free and
+paid users can sign in through DeepL's normal login flow. Press `Ctrl+Shift+M`
+to switch between the complete page and compact translator at any time. The
+account session remains available between launches in
+`~/.local/share/deepl-omarchy`.
+
+## Remove
+
+Remove the plugin with:
+
+```bash
+omarchy plugin remove io.github.cbayschm74.deepl-clipboard
+```
+
+Remove the keyboard shortcut and window rule you added to the Hyprland files,
+then reload Hyprland. To also forget the optional DeepL login, close the
+translator and remove `~/.local/share/deepl-omarchy`.
+
 ## Privacy and security
 
 Clipboard text is handed to Electron through a mode-`0600` request file under
 the current user's Wayland runtime directory. Electron copies it into memory
-and immediately clears the text from that file. Requests larger than 1 MiB
-are rejected. Clipboard contents are not logged.
+and immediately clears the text from that file. Requests larger than 1 MiB are
+discarded before Electron starts, and the translator opens empty. Clipboard
+contents are not logged.
 
 The persistent browser profile is stored outside the repository at
 `~/.local/share/deepl-omarchy`. Never commit that directory. Text submitted

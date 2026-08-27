@@ -5,9 +5,12 @@ import qs.Ui
 
 BarWidget {
   id: root
-  moduleName: "cbayschm.deepl"
+  moduleName: "io.github.cbayschm74.deepl-clipboard"
 
-  readonly property string launcher: Quickshell.env("HOME") + "/deepl-omarchy/launch.sh"
+  readonly property url launcherUrl: Qt.resolvedUrl("launch.sh")
+  readonly property string launcher: decodeURIComponent(
+    String(launcherUrl).replace(/^file:\/\//, "")
+  )
 
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight

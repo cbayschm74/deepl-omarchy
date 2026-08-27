@@ -5,18 +5,23 @@ const os = require("node:os");
 
 const TRANSLATOR_URL = "https://www.deepl.com/translator";
 const MAXIMUM_CLIPBOARD_LENGTH = 1024 * 1024;
-const RUNTIME_DIR = process.env.XDG_RUNTIME_DIR
+const WAYLAND_RUNTIME_DIR = process.env.XDG_RUNTIME_DIR
   || path.join("/run", "user", String(process.getuid()));
-const REQUEST_FILE = path.join(RUNTIME_DIR, "deepl-omarchy", "request");
+const APP_RUNTIME_DIR = process.env.DEEPL_RUNTIME_DIR
+  || path.join(WAYLAND_RUNTIME_DIR, "deepl-omarchy");
+const REQUEST_FILE = path.join(APP_RUNTIME_DIR, "request");
 const THEME_COLORS_FILE = path.join(
   os.homedir(), ".local", "state", "omarchy", "current", "theme", "colors.toml"
 );
 
+const USER_DATA_DIR = process.env.DEEPL_USER_DATA_DIR || path.join(
+    process.env.XDG_DATA_HOME || path.join(os.homedir(), ".local", "share"),
+    "deepl-omarchy"
+  );
+const IS_FIRST_RUN = !fs.existsSync(path.join(USER_DATA_DIR, "Local State"));
+
 app.setName("DeepL Clipboard");
-app.setPath("userData", path.join(
-  process.env.XDG_DATA_HOME || path.join(os.homedir(), ".local", "share"),
-  "deepl-omarchy"
-));
+app.setPath("userData", USER_DATA_DIR);
 
 let mainWindow = null;
 let pendingText = "";
@@ -26,7 +31,7 @@ let injectionAttempts = 0;
 let styleTimer = null;
 let styleAttempts = 0;
 let insertedCssKey = null;
-let minimalMode = true;
+let minimalMode = process.env.DEEPL_START_FULL_PAGE !== "1" && !IS_FIRST_RUN;
 let pageStyled = false;
 let revealTimer = null;
 
@@ -87,6 +92,91 @@ function pageStyleCss(palette) {
     html, body {
       background-color: var(--deepl-omarchy-background) !important;
       color: var(--deepl-omarchy-foreground) !important;
+    }
+
+    /* The complete page is used for login and account management. DeepL gives
+       its header, navigation drawers, dropdowns, and dialogs independent light
+       surfaces, so theme those explicitly when compact mode is disabled. */
+    html:not([data-deepl-omarchy-minimal]) :is(
+      header,
+      nav,
+      aside,
+      [role="dialog"],
+      [role="menu"],
+      [role="listbox"],
+      [aria-modal="true"],
+      [class*="bg-white"],
+      [class*="bg-surface"]
+    ) {
+      background-color: var(--deepl-omarchy-surface) !important;
+      border-color: var(--deepl-omarchy-muted) !important;
+      color: var(--deepl-omarchy-foreground) !important;
+    }
+
+    html:not([data-deepl-omarchy-minimal]) :is(
+      header,
+      nav,
+      aside,
+      [role="dialog"],
+      [role="menu"],
+      [role="listbox"],
+      [aria-modal="true"]
+    ) :is(a, button, label, p, span, div, h1, h2, h3, li) {
+      border-color: var(--deepl-omarchy-muted) !important;
+      color: var(--deepl-omarchy-foreground) !important;
+    }
+
+    html:not([data-deepl-omarchy-minimal]) :is(
+      [role="dialog"],
+      [role="menu"],
+      [role="listbox"],
+      [aria-modal="true"]
+    ) :is(input, textarea, select) {
+      background-color: var(--deepl-omarchy-elevated) !important;
+      border-color: var(--deepl-omarchy-muted) !important;
+      color: var(--deepl-omarchy-foreground) !important;
+    }
+
+    html:not([data-deepl-omarchy-minimal]) :is(
+      header,
+      nav,
+      aside,
+      [role="dialog"],
+      [role="menu"],
+      [role="listbox"]
+    ) button:hover {
+      background-color: var(--deepl-omarchy-elevated) !important;
+    }
+
+    html:not([data-deepl-omarchy-minimal]) :is(
+      button,
+      a[role="button"],
+      [role="button"]
+    ) {
+      background-color: transparent !important;
+      border-color: var(--deepl-omarchy-muted) !important;
+      color: var(--deepl-omarchy-foreground) !important;
+    }
+
+    html:not([data-deepl-omarchy-minimal]) :is(
+      button,
+      a[role="button"],
+      [role="button"]
+    ):is(
+      [aria-current="true"],
+      [aria-selected="true"],
+      [aria-pressed="true"],
+      [data-state="active"],
+      :hover
+    ) {
+      background-color: var(--deepl-omarchy-elevated) !important;
+    }
+
+    html:not([data-deepl-omarchy-minimal]) :is(header, nav, aside) svg,
+    html:not([data-deepl-omarchy-minimal]) :is(header, nav, aside) svg * {
+      color: var(--deepl-omarchy-foreground) !important;
+      fill: currentColor !important;
+      stroke: currentColor !important;
     }
 
     /* Keep DeepL's menus and marketing layout out of sight until the exact
@@ -230,13 +320,12 @@ function pageStyleCss(palette) {
       caret-color: var(--deepl-omarchy-accent) !important;
     }
 
-    /* DeepL calculates the first-line offset too tightly for some scripts
-       (notably CJK), allowing glyphs to touch the sticky language bar. */
-    [data-testid="translator"] [data-testid="translator-source-input"],
-    [data-testid="translator"] [data-testid="translator-target-input"],
-    [data-testid="translator"] [data-testid="translator-target-output"] {
-      box-sizing: border-box !important;
-      padding-block-start: 16px !important;
+    /* Clipboard injection can make DeepL rebuild the two editor panels under
+       its sticky language bar. Move the complete panels—including borders,
+       clear button, content, and footer controls—into normal flow below it. */
+    html[data-deepl-omarchy-minimal]
+      [data-deepl-omarchy-editor-panel] {
+      margin-block-start: 52px !important;
     }
 
     [data-testid="translator"] [class*="border-"] {
@@ -280,8 +369,12 @@ async function applyPageStyle(refreshCss = false) {
         const clearMinimalMarkers = () => {
           document.documentElement.removeAttribute("data-deepl-omarchy-ready");
           document.documentElement.removeAttribute("data-deepl-omarchy-minimal");
-          document.querySelectorAll("[data-deepl-omarchy-path]")
-            .forEach((element) => element.removeAttribute("data-deepl-omarchy-path"));
+          document.querySelectorAll(
+            "[data-deepl-omarchy-path], [data-deepl-omarchy-editor-panel]"
+          ).forEach((element) => {
+            element.removeAttribute("data-deepl-omarchy-path");
+            element.removeAttribute("data-deepl-omarchy-editor-panel");
+          });
         };
 
         const markTranslatorPath = () => {
@@ -289,6 +382,46 @@ async function applyPageStyle(refreshCss = false) {
           const translator = document.querySelector('[data-testid="translator"]');
           if (!translator) return false;
 
+          const sourceEditor = translator.querySelector(
+            '[data-testid="translator-source-input"]'
+          );
+          const targetEditor = translator.querySelector([
+            '[data-testid="translator-target-output"]',
+            '[data-testid="translator-target-input"]',
+          ].join(','));
+          const translatorRect = translator.getBoundingClientRect();
+          const findEditorPanel = (editor) => {
+            if (!editor) return null;
+            let candidate = editor;
+            let element = editor;
+            while (element && element !== translator) {
+              const rect = element.getBoundingClientRect();
+              const isHalfWidthPanel = rect.width >= translatorRect.width * 0.30
+                && rect.width <= translatorRect.width * 0.62
+                && rect.height >= 160;
+              if (isHalfWidthPanel) candidate = element;
+              element = element.parentElement;
+            }
+            return candidate;
+          };
+          const sourcePanel = findEditorPanel(sourceEditor);
+          const targetPanel = findEditorPanel(targetEditor);
+          sourcePanel?.setAttribute("data-deepl-omarchy-editor-panel", "");
+          targetPanel?.setAttribute("data-deepl-omarchy-editor-panel", "");
+
+          const translatorChanged = window.__deeplOmarchyTranslator !== translator;
+          const editorChanged = (Boolean(sourceEditor)
+            && window.__deeplOmarchySourceEditor !== sourceEditor)
+            || (Boolean(targetEditor)
+              && window.__deeplOmarchyTargetEditor !== targetEditor);
+          const shouldReposition = !window.__deeplOmarchyMinimalActive
+            || translatorChanged
+            || editorChanged;
+
+          window.__deeplOmarchyMinimalActive = true;
+          window.__deeplOmarchyTranslator = translator;
+          window.__deeplOmarchySourceEditor = sourceEditor;
+          window.__deeplOmarchyTargetEditor = targetEditor;
           document.documentElement.setAttribute("data-deepl-omarchy-minimal", "");
           let element = translator;
           while (element) {
@@ -297,6 +430,11 @@ async function applyPageStyle(refreshCss = false) {
             element = element.parentElement;
           }
           document.documentElement.setAttribute("data-deepl-omarchy-ready", "");
+          if (shouldReposition) {
+            [0, 80, 200, 400, 700].forEach((delay) => {
+              setTimeout(() => window.scrollTo({ top: 0, left: 0 }), delay);
+            });
+          }
           return true;
         };
 
@@ -304,6 +442,10 @@ async function applyPageStyle(refreshCss = false) {
         const translator = document.querySelector('[data-testid="translator"]');
         if (!translator) return false;
         if (!${minimalMode}) {
+          window.__deeplOmarchyMinimalActive = false;
+          window.__deeplOmarchyTranslator = null;
+          window.__deeplOmarchySourceEditor = null;
+          window.__deeplOmarchyTargetEditor = null;
           document.documentElement.setAttribute("data-deepl-omarchy-ready", "");
           return true;
         }
@@ -403,7 +545,9 @@ function injectionScript(text) {
     // DeepL focuses the source editor after programmatic input and may scroll
     // it underneath the sticky language selector. Keep the compact view at
     // its intended top position; normal user scrolling still works afterward.
-    requestAnimationFrame(() => window.scrollTo({ top: 0, left: 0 }));
+    [0, 100, 250, 500, 900].forEach((delay) => {
+      setTimeout(() => window.scrollTo({ top: 0, left: 0 }), delay);
+    });
     return true;
   }.toString()})(${JSON.stringify(text)})`;
 }
@@ -486,6 +630,17 @@ function configureWebContents(contents) {
     } catch (_) {}
     return { action: "deny" };
   });
+
+  // Authentication providers may use HTTPS redirects or sandboxed popup
+  // windows. Keep those working for paid DeepL accounts, but never allow a
+  // remote page to navigate this application to a local or executable scheme.
+  contents.on("will-navigate", (event, url) => {
+    try {
+      if (new URL(url).protocol === "https:") return;
+    } catch (_) {}
+    event.preventDefault();
+  });
+  contents.on("will-attach-webview", (event) => event.preventDefault());
 }
 
 function createMainWindow() {
