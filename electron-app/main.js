@@ -4,7 +4,9 @@ const path = require("node:path");
 const os = require("node:os");
 
 const TRANSLATOR_URL = "https://www.deepl.com/translator";
-const MAXIMUM_CLIPBOARD_LENGTH = 1024 * 1024;
+const MAXIMUM_CLIPBOARD_BYTES = 1024 * 1024;
+const MAXIMUM_REQUEST_BYTES = MAXIMUM_CLIPBOARD_BYTES + 256;
+const MAXIMUM_THEME_BYTES = 64 * 1024;
 const WAYLAND_RUNTIME_DIR = process.env.XDG_RUNTIME_DIR
   || path.join("/run", "user", String(process.getuid()));
 const APP_RUNTIME_DIR = process.env.DEEPL_RUNTIME_DIR
@@ -35,6 +37,86 @@ let minimalMode = process.env.DEEPL_START_FULL_PAGE !== "1" && !IS_FIRST_RUN;
 let pageStyled = false;
 let revealTimer = null;
 
+function readOwnedRegularFile(filePath, maximumBytes) {
+  const flags = fs.constants.O_RDONLY
+    | (fs.constants.O_NOFOLLOW || 0)
+    | (fs.constants.O_NONBLOCK || 0);
+  let descriptor;
+
+  try {
+    descriptor = fs.openSync(filePath, flags);
+    const metadata = fs.fstatSync(descriptor);
+    if (!metadata.isFile()
+      || metadata.uid !== process.getuid()
+      || (metadata.mode & 0o022) !== 0
+      || metadata.size > maximumBytes) return null;
+
+    const buffer = Buffer.alloc(maximumBytes + 1);
+    let total = 0;
+    while (total < buffer.length) {
+      const count = fs.readSync(descriptor, buffer, total, buffer.length - total, null);
+      if (count === 0) break;
+      total += count;
+    }
+    if (total > maximumBytes) return null;
+    return new TextDecoder("utf-8", { fatal: true }).decode(buffer.subarray(0, total));
+  } catch (_) {
+    return null;
+  } finally {
+    if (descriptor !== undefined) {
+      try { fs.closeSync(descriptor); } catch (_) {}
+    }
+  }
+}
+
+function consumeClipboardRequest() {
+  const flags = fs.constants.O_RDWR
+    | (fs.constants.O_NOFOLLOW || 0)
+    | (fs.constants.O_NONBLOCK || 0);
+  let descriptor;
+
+  try {
+    descriptor = fs.openSync(REQUEST_FILE, flags);
+    const metadata = fs.fstatSync(descriptor);
+    if (!metadata.isFile()
+      || metadata.uid !== process.getuid()
+      || (metadata.mode & 0o077) !== 0
+      || metadata.size > MAXIMUM_REQUEST_BYTES) return null;
+
+    const buffer = Buffer.alloc(MAXIMUM_REQUEST_BYTES + 1);
+    let total = 0;
+    while (total < buffer.length) {
+      const count = fs.readSync(descriptor, buffer, total, buffer.length - total, null);
+      if (count === 0) break;
+      total += count;
+    }
+    if (total > MAXIMUM_REQUEST_BYTES) return null;
+
+    const separator = buffer.subarray(0, total).indexOf(0x0a);
+    if (separator < 1 || separator > 64) return null;
+    const requestId = buffer.subarray(0, separator).toString("ascii");
+    if (!/^[0-9]{1,24}-[0-9]{1,12}$/.test(requestId)) return null;
+
+    const payload = buffer.subarray(separator + 1, total);
+    if (payload.length > MAXIMUM_CLIPBOARD_BYTES) return null;
+    const text = new TextDecoder("utf-8", { fatal: true }).decode(payload);
+
+    // Remove clipboard contents through the descriptor already validated,
+    // avoiding a second path lookup that could follow a replacement link.
+    const marker = Buffer.from(`${requestId}\n`, "utf8");
+    fs.ftruncateSync(descriptor, 0);
+    fs.writeSync(descriptor, marker, 0, marker.length, 0);
+    fs.fsyncSync(descriptor);
+    return { requestId, text };
+  } catch (_) {
+    return null;
+  } finally {
+    if (descriptor !== undefined) {
+      try { fs.closeSync(descriptor); } catch (_) {}
+    }
+  }
+}
+
 function readThemePalette() {
   const darkFallback = nativeTheme.shouldUseDarkColors;
   const fallback = darkFallback
@@ -58,19 +140,26 @@ function readThemePalette() {
       };
 
   try {
-    const source = fs.readFileSync(THEME_COLORS_FILE, "utf8");
-    const value = (name) => source.match(
+    const source = readOwnedRegularFile(THEME_COLORS_FILE, MAXIMUM_THEME_BYTES);
+    if (source === null) return fallback;
+    const rawValue = (name) => source.match(
       new RegExp(`^\\s*${name}\\s*=\\s*["']([^"']+)["']`, "m")
     )?.[1];
-    const dark = (value("mode") || (darkFallback ? "dark" : "light")) !== "light";
+    const colorValue = (name) => {
+      const candidate = rawValue(name);
+      return /^#[0-9a-fA-F]{6}(?:[0-9a-fA-F]{2})?$/.test(candidate || "")
+        ? candidate : undefined;
+    };
+    const mode = rawValue("mode");
+    const dark = mode === "dark" || (mode !== "light" && darkFallback);
     return {
       dark,
-      background: value("dark_background") || value("background") || fallback.background,
-      surface: value("background") || fallback.surface,
-      elevated: value("lighter_background") || fallback.elevated,
-      foreground: value("foreground") || fallback.foreground,
-      muted: value("muted") || fallback.muted,
-      accent: value("accent") || value("blue") || fallback.accent,
+      background: colorValue("dark_background") || colorValue("background") || fallback.background,
+      surface: colorValue("background") || fallback.surface,
+      elevated: colorValue("lighter_background") || fallback.elevated,
+      foreground: colorValue("foreground") || fallback.foreground,
+      muted: colorValue("muted") || fallback.muted,
+      accent: colorValue("accent") || colorValue("blue") || fallback.accent,
     };
   } catch (_) {
     return fallback;
@@ -578,29 +667,13 @@ async function tryInjectClipboard() {
 
 function translateClipboardRequest() {
   focusMainWindow();
+  const request = consumeClipboardRequest();
+  if (!request) return;
 
-  let request;
-  try {
-    request = fs.readFileSync(REQUEST_FILE, "utf8");
-  } catch (_) {
-    return;
-  }
-
-  const separator = request.indexOf("\n");
-  if (separator < 0) return;
-
-  const requestId = request.slice(0, separator);
+  const { requestId, text } = request;
   if (!requestId || requestId === lastRequestId) return;
   lastRequestId = requestId;
-
-  const text = request.slice(separator + 1);
-  try {
-    // Keep the request marker but remove clipboard contents from disk as soon
-    // as this process has copied them into memory.
-    fs.writeFileSync(REQUEST_FILE, `${requestId}\n`, { mode: 0o600 });
-  } catch (_) {}
-
-  if (!text || text.length > MAXIMUM_CLIPBOARD_LENGTH) return;
+  if (!text) return;
 
   pendingText = text;
   injectionAttempts = 0;

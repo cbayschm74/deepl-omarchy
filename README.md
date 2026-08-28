@@ -102,7 +102,10 @@ Clipboard text is handed to Electron through a mode-`0600` request file under
 the current user's Wayland runtime directory. Electron copies it into memory
 and immediately clears the text from that file. Requests larger than 1 MiB are
 discarded before Electron starts, and the translator opens empty. Clipboard
-contents are not logged.
+contents are not logged. Clipboard helpers have fixed deadlines, and Electron
+opens request and theme files without following symbolic links, validates the
+opened descriptor, and caps bytes before UTF-8 decoding. Theme values are
+restricted to the supported light/dark modes and hexadecimal colors.
 
 The persistent browser profile is stored outside the repository at
 `~/.local/share/deepl-omarchy`. Never commit that directory. Text submitted

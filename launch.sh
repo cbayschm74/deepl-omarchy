@@ -11,10 +11,26 @@ SCRIPT_DIR="$(cd "$(dirname "${SCRIPT_PATH}")" && pwd)"
 APP_DIR="$SCRIPT_DIR/electron-app"
 RUNTIME_DIR="${DEEPL_RUNTIME_DIR:-${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/deepl-omarchy}"
 REQUEST_FILE="$RUNTIME_DIR/request"
-TEMP_FILE="$RUNTIME_DIR/request.new.$$"
 MAXIMUM_CLIPBOARD_BYTES=$((1024 * 1024))
+MAXIMUM_TYPE_BYTES=$((64 * 1024))
+RUNTIME_UID=$(id -u)
 
-install -d -m 700 "$RUNTIME_DIR"
+if [ ! -e "$RUNTIME_DIR" ]; then
+    mkdir -m 700 -- "$RUNTIME_DIR"
+fi
+
+if [ -L "$RUNTIME_DIR" ] || [ ! -d "$RUNTIME_DIR" ]; then
+    echo "DeepL runtime path is not a directory" >&2
+    exit 1
+fi
+
+read -r RUNTIME_OWNER RUNTIME_MODE < <(stat -c '%u %a' -- "$RUNTIME_DIR")
+if [ "$RUNTIME_OWNER" != "$RUNTIME_UID" ] || [ "$RUNTIME_MODE" != 700 ]; then
+    echo "DeepL runtime directory must be owned by the current user with mode 700" >&2
+    exit 1
+fi
+
+TEMP_FILE=$(mktemp "$RUNTIME_DIR/.request.XXXXXX")
 trap 'rm -f -- "$TEMP_FILE"' EXIT
 
 printf '%s-%s\n' "$(date +%s%N)" "$$" > "$TEMP_FILE"
@@ -22,6 +38,8 @@ HEADER_BYTES=$(wc -c < "$TEMP_FILE")
 
 if [ "${DEEPL_SKIP_CLIPBOARD:-0}" != "1" ]; then
     TEXT_TYPE=""
+    OFFERED_TYPES=$(set +o pipefail; timeout --kill-after=1s 2s wl-paste --list-types 2>/dev/null \
+        | head -c "$MAXIMUM_TYPE_BYTES" || true)
     while IFS= read -r OFFERED_TYPE; do
         case "$OFFERED_TYPE" in
             text/plain | 'text/plain;charset=utf-8' | UTF8_STRING | STRING | TEXT)
@@ -29,12 +47,12 @@ if [ "${DEEPL_SKIP_CLIPBOARD:-0}" != "1" ]; then
                 break
                 ;;
         esac
-    done < <(wl-paste --list-types 2>/dev/null || true)
+    done <<< "$OFFERED_TYPES"
 
     if [ -n "$TEXT_TYPE" ]; then
         set +e
         set +o pipefail
-        wl-paste --type "$TEXT_TYPE" --no-newline 2>/dev/null \
+        timeout --kill-after=1s 3s wl-paste --type "$TEXT_TYPE" --no-newline 2>/dev/null \
             | head -c "$((MAXIMUM_CLIPBOARD_BYTES + 1))" >> "$TEMP_FILE"
         PASTE_STATUS=${PIPESTATUS[0]}
         set -o pipefail
@@ -62,7 +80,17 @@ if [ "${DEEPL_SKIP_CLIPBOARD:-0}" != "1" ]; then
 fi
 
 chmod 600 "$TEMP_FILE"
-mv -f "$TEMP_FILE" "$REQUEST_FILE"
+# Revalidate the directory immediately before the atomic publication.
+if [ -L "$RUNTIME_DIR" ] || [ ! -d "$RUNTIME_DIR" ]; then
+    echo "DeepL runtime directory changed while preparing the request" >&2
+    exit 1
+fi
+read -r RUNTIME_OWNER RUNTIME_MODE < <(stat -c '%u %a' -- "$RUNTIME_DIR")
+if [ "$RUNTIME_OWNER" != "$RUNTIME_UID" ] || [ "$RUNTIME_MODE" != 700 ]; then
+    echo "DeepL runtime directory changed while preparing the request" >&2
+    exit 1
+fi
+mv -fT -- "$TEMP_FILE" "$REQUEST_FILE"
 trap - EXIT
 
 if [ -n "${DEEPL_ELECTRON:-}" ]; then

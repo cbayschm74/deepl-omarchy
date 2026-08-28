@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "io.github.cbayschm74.deepl-clipboard",
   "name": "DeepL Clipboard",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "author": "Carlos Bay-Schmith",
   "license": "MIT",
   "description": "Open a compact DeepL window and translate plain-text clipboard contents.",
