@@ -4,6 +4,8 @@ An unofficial clipboard translator that integrates the DeepL web translator
 with the Omarchy desktop. Copy text, press `Ctrl+Alt+C` or click the bar icon,
 and the text is inserted into a compact, floating translator window.
 
+![DeepL Clipboard translating Spanish to English](preview.png)
+
 The client follows the active Omarchy light or dark palette, preserves a
 private DeepL login session, and uses the system Electron runtime. It is built
 for Wayland and does not depend on Go, GTK WebKit, `xsel`, or `xdotool`.
